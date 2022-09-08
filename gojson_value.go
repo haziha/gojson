@@ -14,6 +14,14 @@ var valuePool = sync.Pool{
 	},
 }
 
+func MustNewValue(typ Type, val interface{}) (v *Value) {
+	v, err := NewValue(typ, val)
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
 func NewValue(typ Type, val interface{}) (v *Value, err error) {
 	v = valuePool.Get().(*Value)
 	err = v.SetValue(typ, val)
@@ -26,6 +34,44 @@ type Value struct {
 	boolean bool              // Boolean
 	arr     []*Value          // Array
 	obj     map[string]*Value // Object
+}
+
+func (_this *Value) MustInterface() (val interface{}) {
+	val, err := _this.Interface()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) Interface() (val interface{}, err error) {
+	switch _this.typ {
+	case String:
+		return _this.str, nil
+	case Number:
+		return json.Number(_this.str), nil
+	case Boolean:
+		return _this.boolean, nil
+	case Null:
+		return nil, nil
+	case Array:
+		valSlice := make([]interface{}, 0, _this.MustLen())
+		for i := 0; i < _this.MustLen(); i++ {
+			valSlice = append(valSlice, _this.MustIndex(i).MustInterface())
+		}
+		val = valSlice
+		return
+	case Object:
+		valObject := make(map[string]interface{})
+		for _, k := range _this.MustKeys() {
+			valObject[k] = _this.MustValue(k).MustInterface()
+		}
+		val = valObject
+		return
+	default:
+		err = fmt.Errorf("unknown type %v", _this.typ)
+		return
+	}
 }
 
 func (_this *Value) Get(k ...interface{}) (val *Value, err error) {
