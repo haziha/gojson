@@ -3,407 +3,327 @@ package gojson
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/haziha/golist"
 	"reflect"
 	"strconv"
-	"sync"
 )
-
-var valuePool = sync.Pool{
-	New: func() interface{} {
-		return new(Value)
-	},
-}
-
-func MustNewValue(typ Type, val interface{}) (v *Value) {
-	v, err := NewValue(typ, val)
-	if err != nil {
-		panic(err)
-	}
-	return
-}
-
-func NewValue(typ Type, val interface{}) (v *Value, err error) {
-	v = valuePool.Get().(*Value)
-	err = v.SetValue(typ, val)
-	return v, err
-}
 
 type Value struct {
 	typ     Type
-	str     string            // String / Number
-	boolean bool              // Boolean
-	arr     []*Value          // Array
-	obj     map[string]*Value // Object
-}
-
-func (_this *Value) MustInterface() (val interface{}) {
-	val, err := _this.Interface()
-	if err != nil {
-		panic(err)
-	}
-	return
-}
-
-func (_this *Value) Interface() (val interface{}, err error) {
-	switch _this.typ {
-	case String:
-		return _this.str, nil
-	case Number:
-		return json.Number(_this.str), nil
-	case Boolean:
-		return _this.boolean, nil
-	case Null:
-		return nil, nil
-	case Array:
-		valSlice := make([]interface{}, 0, _this.MustLen())
-		for i := 0; i < _this.MustLen(); i++ {
-			valSlice = append(valSlice, _this.MustIndex(i).MustInterface())
-		}
-		val = valSlice
-		return
-	case Object:
-		valObject := make(map[string]interface{})
-		for _, k := range _this.MustKeys() {
-			valObject[k] = _this.MustValue(k).MustInterface()
-		}
-		val = valObject
-		return
-	default:
-		err = fmt.Errorf("unknown type %v", _this.typ)
-		return
-	}
+	str     string
+	boolean bool
+	arr     []*Value
+	obj     map[string]*Value
 }
 
 func (_this *Value) Get(k ...interface{}) (val *Value, err error) {
-	ptr := _this
+	defer func() {
+		err1 := recover()
+		if err1 != nil {
+			err = fmt.Errorf("%v", err1)
+		}
+	}()
 	kVal := reflect.ValueOf(k)
+	ptrList := golist.New[*Value]()
+	ptrList.PushBack(_this)
 
 	for i := range k {
-		switch ptr.Type() {
+		ptrBack := ptrList.Back().Value
+		switch ptrBack.Type() {
 		case Object:
-			k := kVal.Index(i)
-			if !k.IsValid() {
-				err = fmt.Errorf("key must be string, but empty")
+			key := kVal.Index(i)
+			if !key.IsValid() {
+				err = fmt.Errorf("key must be string, but invalid")
 				return
 			}
-			k = k.Elem()
-			var key string
-			if k.Kind() == reflect.String {
-				key = k.String()
-			} else if k.Kind() == reflect.Slice && k.Index(i).IsValid() && k.Type() == byteType {
-				key = string(k.Bytes())
+			key = key.Elem()
+			if key.Kind() == reflect.String {
+				ptrList.PushBack(ptrBack.Value(key.String()))
+			} else if key.Kind() == reflect.Slice {
+				if key.IsNil() {
+					err = fmt.Errorf("key must be string, but empty slice")
+					return
+				} else if key.Type() != byteSliceType {
+					err = fmt.Errorf("key must be string, but not byte slice")
+					return
+				}
+				ptrList.PushBack(ptrBack.Value(string(key.Bytes())))
 			} else {
-				err = fmt.Errorf("key must be string, but %s: %v", k.Kind(), k.Interface())
-				return
-			}
-			ptr, err = ptr.Value(key)
-			if err != nil {
+				err = fmt.Errorf("key must be string, but %v", key.Kind())
 				return
 			}
 		case Array:
-			k := kVal.Index(i)
-			if !k.IsValid() {
-				err = fmt.Errorf("key must be integer, but empty")
+			index := kVal.Index(i)
+			if !index.IsValid() {
+				err = fmt.Errorf("index must be integer, but mepty")
 				return
 			}
-			k = k.Elem()
-			var index int
-			if k.CanInt() {
-				index = int(k.Int())
-			} else if k.CanUint() {
-				index = int(k.Uint())
-			} else if k.CanFloat() {
-				index = int(k.Float())
+			index = index.Elem()
+			if index.CanInt() {
+				ptrList.PushBack(ptrBack.Index(int(index.Int())))
+			} else if index.CanUint() {
+				ptrList.PushBack(ptrBack.Index(int(index.Uint())))
+			} else if index.CanFloat() {
+				ptrList.PushBack(ptrBack.Index(int(index.Float())))
+			} else if index.Kind() == reflect.String {
+				jN := json.Number(index.String())
+				var i64 int64
+				if i64, err = jN.Int64(); err != nil {
+					err = fmt.Errorf("index must be integer, but string and cannot conver to integer: %s", jN)
+					return
+				}
+				ptrList.PushBack(ptrBack.Index(int(i64)))
 			} else {
-				err = fmt.Errorf("index must be integer, but %s: %v", kVal.Index(i).Kind(), kVal.Index(i).Interface())
-				return
-			}
-			ptr, err = ptr.Index(index)
-			if err != nil {
-				return
+				err = fmt.Errorf("index must be integer, but %v", index.Kind())
 			}
 		default:
-			err = fmt.Errorf("cannot get element in %s", ptr.Type())
-			return
+			err = fmt.Errorf("cannot get element in %v", ptrBack.Type())
 		}
 	}
 
-	return ptr, nil
+	return ptrList.Back().Value, nil
 }
 
-func (_this *Value) Len() (length int, err error) {
-	if _this.typ&(Object|Array) != 0 {
-		if _this.typ == Object {
-			length = len(_this.obj)
-		} else {
-			length = len(_this.arr)
-		}
-		return
-	}
-	return -1, _this.typ.Error(Object | Array)
-}
-
-func (_this *Value) Keys() (keys []string, err error) {
-	if _this.typ&Object != 0 {
-		keys = make([]string, 0, len(_this.obj))
-		for k := range _this.obj {
-			keys = append(keys, k)
-		}
-		return
-	}
-	return nil, _this.typ.Error(Object)
-}
-
-func (_this *Value) Value(key string) (val *Value, err error) {
-	if _this.typ&Object != 0 {
-		var ok bool
-		val, ok = _this.obj[key]
-		if !ok {
-			err = fmt.Errorf("not found \"%s\" in object", key)
-			return
-		}
-		return
-	}
-	return nil, _this.typ.Error(Object)
-}
-
-func (_this *Value) Index(index int) (val *Value, err error) {
-	if _this.typ&Array != 0 {
-		if index >= 0 && index < len(_this.arr) {
-			val = _this.arr[index]
-			return
-		}
-		err = fmt.Errorf("out of slice")
-		return
-	}
-	return nil, _this.typ.Error(Array)
-}
-
-func (_this *Value) Null() (interface{}, error) {
-	if _this.typ&Null != 0 {
-		return nil, nil
-	}
-	return nil, _this.typ.Error(Null)
-}
-
-func (_this *Value) Boolean() (bool, error) {
-	if _this.typ&Boolean != 0 {
-		return _this.boolean, nil
-	}
-	return false, _this.typ.Error(Boolean)
-}
-
-func (_this *Value) Float64() (float64, error) {
-	if _this.typ&Number != 0 {
-		f64, _ := json.Number(_this.str).Float64()
-		return f64, nil
-	}
-	return 0, _this.typ.Error(Number)
-}
-
-func (_this *Value) Int64() (int64, error) {
-	if _this.typ&Number != 0 {
-		i64, _ := json.Number(_this.str).Int64()
-		return i64, nil
-	}
-	return 0, _this.typ.Error(Number)
-}
-
-func (_this *Value) Number() (json.Number, error) {
-	if _this.typ&Number != 0 {
-		return json.Number(_this.str), nil
-	}
-	return "", _this.typ.Error(Number)
-}
-
-func (_this *Value) String() (string, error) {
-	if _this.typ&(String|Number) != 0 {
-		return _this.str, nil
-	}
-	return "", _this.typ.Error(String)
-}
-
-func (_this *Value) SetValue(typ Type, val interface{}) error {
-	vVal := reflect.ValueOf(val)
-	switch typ {
-	case String:
-		if vVal.Kind() == reflect.String {
-			_this.str = vVal.String()
-		} else if vVal.Kind() == reflect.Slice && vVal.IsValid() && vVal.Type() == byteType {
-			_this.str = string(vVal.Bytes())
-		} else {
-			return fmt.Errorf("val must be string, but %v", vVal.Kind())
-		}
-	case Number:
-	case Boolean:
-		if vVal.Kind() == reflect.Bool {
-			_this.boolean = vVal.Bool()
-		} else {
-			return fmt.Errorf("val must be bool, but %v", vVal.Kind())
-		}
-	case Null:
-	case Array:
-		if vVal.Kind() == sliceType.Kind() {
-			if vVal.Type() == sliceType {
-				_this.arr = val.([]*Value)
-			} else {
-				return fmt.Errorf("val must be %v, but %v", sliceType, vVal.Type())
-			}
-		} else {
-			return fmt.Errorf("val must be %v, but %v", sliceType.Kind(), vVal.Kind())
-		}
-	case Object:
-		if vVal.Kind() == objectType.Kind() {
-			if vVal.Type() == objectType {
-				_this.obj = val.(map[string]*Value)
-			} else {
-				return fmt.Errorf("val must be %v, but %v", objectType, vVal.Type())
-			}
-		} else {
-			return fmt.Errorf("val must be %v, but %v", objectType.Kind(), vVal.Kind())
-		}
-	default:
-		return fmt.Errorf("unknown type: %d", typ)
-	}
-	_this.typ = typ
-
-	if _this.typ&Number != 0 {
-		if vVal.CanInt() {
-			_this.str = strconv.FormatInt(vVal.Int(), 10)
-		} else if vVal.CanUint() {
-			_this.str = strconv.FormatUint(vVal.Uint(), 10)
-		} else if vVal.CanFloat() {
-			_this.str = strconv.FormatFloat(vVal.Float(), 'f', -1, 64)
-		} else if vVal.Kind() == reflect.String {
-			if _, err := json.Number(vVal.String()).Float64(); err == nil {
-				_this.str = vVal.String()
-			} else if _, err = json.Number(vVal.String()).Int64(); err == nil {
-				_this.str = vVal.String()
-			} else {
-				return fmt.Errorf("value must be convertible to integer or float, but \"%v\" cannot", val)
-			}
-		} else if vVal.Kind() == reflect.Slice && vVal.IsValid() && vVal.Type() == byteType {
-			bytes := vVal.Bytes()
-			jN := json.Number(bytes)
-			if _, err := jN.Float64(); err == nil {
-				_this.str = jN.String()
-			} else if _, err = jN.Int64(); err == nil {
-				_this.str = jN.String()
-			} else {
-				return fmt.Errorf("value must be convertible to integer or float, but \"%v\" cannot", jN.String())
-			}
-		} else {
-			return fmt.Errorf("value must be convertible to integer or float, but \"%v\" cannot", val)
-		}
-	}
-
-	return nil
-}
-
-func (_this *Value) MustLen() (length int) {
-	length, err := _this.Len()
-	if err != nil {
-		panic(err)
-	}
-	return
-}
-
-func (_this *Value) MustKeys() (keys []string) {
-	keys, err := _this.Keys()
-	if err != nil {
-		panic(err)
-	}
-	return
-}
-
-func (_this *Value) MustValue(key string) (val *Value) {
-	val, err := _this.Value(key)
-	if err != nil {
-		panic(err)
-	}
-	return
-}
-
-func (_this *Value) MustIndex(index int) (val *Value) {
-	val, err := _this.Index(index)
-	if err != nil {
-		panic(err)
-	}
-	return
-}
-
-func (_this *Value) MustNull() interface{} {
-	_, err := _this.Null()
-	if err != nil {
-		panic(err)
-	}
-	return nil
-}
-
-func (_this *Value) MustBoolean() bool {
-	b, err := _this.Boolean()
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
-
-func (_this *Value) MustFloat64() float64 {
-	f64, err := _this.Float64()
-	if err != nil {
-		panic(err)
-	}
-	return f64
-}
-
-func (_this *Value) MustInt64() int64 {
-	i64, err := _this.Int64()
+func (_this *Value) Int64() int64 {
+	num := _this.Number()
+	i64, err := num.Int64()
 	if err != nil {
 		panic(err)
 	}
 	return i64
 }
 
-func (_this *Value) MustNumber() json.Number {
-	jN, err := _this.Number()
+func (_this *Value) Float64() float64 {
+	num := _this.Number()
+	f64, err := num.Float64()
 	if err != nil {
 		panic(err)
 	}
-	return jN
+	return f64
 }
 
-func (_this *Value) MustString() string {
-	str, err := _this.String()
-	if err != nil {
-		panic(err)
+func (_this *Value) Keys() []string {
+	if _this.typ&Object == 0 {
+		panic(_this.typ.Error(Object))
 	}
-	return str
+	strList := make([]string, 0, len(_this.obj))
+
+	for k := range _this.obj {
+		strList = append(strList, k)
+	}
+
+	return strList
 }
 
-func (_this *Value) IsObject() bool {
-	return _this.typ&Object != 0
+func (_this *Value) Value(key string) *Value {
+	if _this.typ&Object == 0 {
+		panic(_this.typ.Error(Object))
+	}
+	return _this.obj[key]
 }
 
-func (_this *Value) IsArray() bool {
-	return _this.typ&Array != 0
+/*
+Len
+Just object or array
+*/
+func (_this *Value) Len() int {
+	if _this.typ&(Object|Array) == 0 {
+		panic(_this.typ.Error(Object | Array))
+	}
+	if _this.typ == Object {
+		return len(_this.obj)
+	} else {
+		return len(_this.arr)
+	}
 }
 
-func (_this *Value) IsNull() bool {
-	return _this.typ&Null != 0
+func (_this *Value) Index(i int) *Value {
+	if _this.typ&Array == 0 {
+		panic(_this.typ.Error(Array))
+	}
+	return _this.arr[i]
 }
 
-func (_this *Value) IsBoolean() bool {
-	return _this.typ&Boolean != 0
+/*
+Str
+Just string or number
+*/
+func (_this *Value) Str() string {
+	if _this.typ&(String|Number) == 0 {
+		panic(_this.typ.Error(String | Number))
+	}
+	return _this.str
 }
 
-func (_this *Value) IsNumber() bool {
-	return _this.typ&Number != 0
+func (_this *Value) Number() json.Number {
+	if _this.typ&Number == 0 {
+		panic(_this.typ.Error(Number))
+	}
+	return json.Number(_this.str)
 }
 
-func (_this *Value) IsString() bool {
-	return _this.typ&String != 0
+func (_this *Value) Bool() bool {
+	if _this.typ&Boolean == 0 {
+		panic(_this.typ.Error(Boolean))
+	}
+	return _this.boolean
+}
+
+func (_this *Value) Null() interface{} {
+	if _this.typ&Null == 0 {
+		panic(_this.typ.Error(Null))
+	}
+	return nil
 }
 
 func (_this *Value) Type() Type {
 	return _this.typ
+}
+
+func (_this *Value) Interface() (val interface{}) {
+	type tempPair struct {
+		src *Value
+		dst reflect.Value
+
+		flag      bool
+		key       reflect.Value
+		parentMap reflect.Value
+	}
+	vList := golist.New[tempPair]()
+	vList.PushBack(tempPair{
+		_this, reflect.ValueOf(&val).Elem(),
+		false, reflect.Value{}, reflect.Value{}})
+
+	for vList.Len() != 0 {
+		back := vList.Back()
+		vList.Remove(back)
+
+		pair := back.Value
+		src := pair.src
+		dst := pair.dst
+
+		switch src.typ {
+		case String:
+			dst.Set(reflect.ValueOf(src.str))
+		case Number:
+			dst.Set(reflect.ValueOf(json.Number(src.str)))
+		case Boolean:
+			dst.Set(reflect.ValueOf(src.boolean))
+		case Null:
+			dst.Set(reflect.New(interfaceType).Elem())
+		case Array:
+			dst.Set(reflect.MakeSlice(sliceType, len(src.arr), len(src.arr)))
+			for i := range src.arr {
+				vList.PushBack(tempPair{
+					src.arr[i], dst.Elem().Index(i),
+					false, reflect.Value{}, reflect.Value{}})
+			}
+		case Object:
+			dst.Set(reflect.MakeMap(mapType))
+			for k := range src.obj {
+				key := reflect.ValueOf(k)
+				vList.PushBack(tempPair{
+					src.obj[k], reflect.New(interfaceType).Elem(),
+					true, key, dst})
+			}
+		default:
+			panic(fmt.Errorf("unknown type, cannot convert to json type"))
+		}
+
+		if pair.flag {
+			pair.parentMap.Elem().SetMapIndex(pair.key, dst)
+		}
+	}
+
+	return
+}
+
+func FromInterface(val interface{}) (v *Value, err error) {
+	type tempPair struct {
+		src reflect.Value
+		dst *Value
+	}
+
+	v = new(Value)
+	vList := golist.New[tempPair]()
+	vList.PushBack(tempPair{src: reflect.ValueOf(val), dst: v})
+
+	for vList.Len() != 0 {
+		back := vList.Back()
+		vList.Remove(back)
+
+		pair := back.Value
+		src := pair.src
+		dst := pair.dst
+
+		switch src.Kind() {
+		case reflect.Invalid:
+			dst.typ = Null
+		case reflect.Bool:
+			dst.typ = Boolean
+			dst.boolean = src.Bool()
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			dst.typ = Number
+			dst.str = strconv.FormatInt(src.Int(), 10)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			dst.typ = Number
+			dst.str = strconv.FormatUint(src.Uint(), 10)
+		case reflect.Float32, reflect.Float64:
+			dst.typ = Number
+			dst.str = strconv.FormatFloat(src.Float(), 'f', -1, 64)
+		case reflect.Array:
+			fallthrough
+		case reflect.Slice:
+			dst.typ = Array
+			dst.arr = make([]*Value, src.Len())
+			for i := 0; i < src.Len(); i++ {
+				dst.arr[i] = new(Value)
+				vList.PushBack(tempPair{src.Index(i), dst.arr[i]})
+			}
+		case reflect.Interface:
+			fallthrough
+		case reflect.Pointer:
+			vList.PushBack(tempPair{src.Elem(), dst})
+		case reflect.Map:
+			dst.typ = Object
+			if src.Type().Key() != stringType {
+				err = fmt.Errorf("map key must be string, but %v", src.Type().Key())
+				return nil, err
+			}
+			dst.obj = make(map[string]*Value)
+			iter := src.MapRange()
+			for iter.Next() {
+				key := iter.Key()
+				value := iter.Value()
+
+				nV := new(Value)
+				dst.obj[key.String()] = nV
+				vList.PushBack(tempPair{value, nV})
+			}
+		case reflect.String:
+			if src.Type() == jsonNumberType {
+				dst.typ = Number
+			} else {
+				dst.typ = String
+			}
+			dst.str = src.String()
+		case reflect.Struct:
+			dst.typ = Object
+			dst.obj = make(map[string]*Value)
+
+			for i := 0; i < src.NumField(); i++ {
+				if !src.Type().Field(i).IsExported() { // 过滤私有成员
+					continue
+				}
+				nV := new(Value)
+				dst.obj[src.Type().Field(i).Name] = nV
+				vList.PushBack(tempPair{src.Field(i), nV})
+			}
+		default:
+			v = nil
+			err = fmt.Errorf("cannot convert %v to json type", src.Kind())
+			return
+		}
+	}
+	return
 }

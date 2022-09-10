@@ -6,53 +6,99 @@ import (
 	"testing"
 )
 
-func TestValue_Interface(t *testing.T) {
-	val, _ := NewValue(Boolean, true)
-	fmt.Println(val.Interface())
-	_ = val.SetValue(String, "2333")
-	fmt.Println(val.Interface())
-	_ = val.SetValue(Number, 23333)
-	fmt.Println(val.Interface())
-	_ = val.SetValue(Null, nil)
-	fmt.Println(val.Interface())
-	_ = val.SetValue(Object, map[string]*Value{
-		"test": MustNewValue(String, "value"), "test2": MustNewValue(Number, 1),
-		"test3": MustNewValue(Boolean, true), "test4": MustNewValue(Null, nil),
-		"test5": MustNewValue(Array, []*Value{
-			MustNewValue(String, "str"), MustNewValue(Boolean, false), MustNewValue(Number, 233333),
-			MustNewValue(Null, nil),
-		}),
-	})
-	fmt.Println(val.Interface())
+var demoString = `{
+	"array": [
+		"array.string",
+		111111,
+		true,
+		null
+	],
+	"bool": true,
+	"null": null,
+	"number": 123456,
+	"object": {
+		"object.bool": true,
+		"object.null": null,
+		"object.number": 654321,
+		"object.string": "string"
+	},
+	"string": "this is string"
+}`
+
+var demoInterface = map[string]interface{}{
+	"string": "this is string",
+	"number": 123456,
+	"bool":   true,
+	"null":   nil,
+	"object": map[string]interface{}{
+		"object.string": "string",
+		"object.number": 654321,
+		"object.bool":   true,
+		"object.null":   nil,
+	},
+	"array": []interface{}{
+		"array.string",
+		111111,
+		true,
+		nil,
+	},
 }
 
-func TestNewValue(t *testing.T) {
-	fmt.Println(NewValue(Boolean, true))
-	fmt.Println(NewValue(Boolean, false))
-	fmt.Println(NewValue(Boolean, 1))
-	fmt.Println(NewValue(Boolean, nil))
+func TestValue_Get(t *testing.T) {
+	val, err := FromInterface(demoInterface)
+	if err != nil {
+		panic(err)
+	}
+	v, err := val.Get("object", "object.number")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(v)
+	v, err = val.Get("array", 1)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(v)
+}
 
-	fmt.Println(NewValue(Number, 1))
-	fmt.Println(NewValue(Number, json.Number("1233")))
-	fmt.Println(NewValue(Number, 3.14))
-	fmt.Println(NewValue(Number, "3.14"))
-	fmt.Println(NewValue(Number, "abc"))
-	fmt.Println(NewValue(Number, nil))
+func TestValue_Interface(t *testing.T) {
+	val, err := FromInterface(demoInterface)
+	fmt.Println(val, err)
+	fmt.Println(val.Interface())
+	data, _ := json.Marshal(val.Interface())
+	fmt.Println(string(data))
+}
 
-	fmt.Println(NewValue(String, ""))
-	fmt.Println(NewValue(String, []byte("123444")))
-	var test []byte
-	fmt.Println(NewValue(String, test))
-	fmt.Println(NewValue(String, 123))
-	fmt.Println(NewValue(String, true))
-	fmt.Println(NewValue(String, nil))
-
-	fmt.Println(NewValue(Null, nil))
-	fmt.Println(NewValue(Null, 1))
-
-	fmt.Println(NewValue(Array, []*Value{}))
-	fmt.Println(NewValue(Array, nil))
-
-	fmt.Println(NewValue(Object, map[string]*Value{}))
-	fmt.Println(NewValue(Object, nil))
+func TestFromInterface(t *testing.T) {
+	{
+		val, err := FromInterface(1)
+		fmt.Println(val.typ, val.str, err)
+	}
+	{
+		val, err := FromInterface(nil)
+		fmt.Println(val.typ, err)
+	}
+	{
+		val, err := FromInterface(true)
+		fmt.Println(val.typ, val.boolean, err)
+	}
+	{
+		val, err := FromInterface("string")
+		fmt.Println(val.typ, val.str, err)
+	}
+	{
+		val, err := FromInterface(map[string]interface{}{
+			"number": 123,
+			"string": "this is string",
+			"bool":   true,
+			"null":   nil,
+		})
+		fmt.Println(val.typ, val.obj, err)
+	}
+	{
+		val, err := FromInterface([]interface{}{
+			456, "slice string", true, nil,
+		})
+		fmt.Println(val.typ, val.arr, err)
+	}
 }

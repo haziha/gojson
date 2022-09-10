@@ -27,6 +27,8 @@ func (_this Type) String() string {
 		return "array"
 	case Object:
 		return "object"
+	case String | Number:
+		return "string or number"
 	case Array | Object:
 		return "array or object"
 	default:

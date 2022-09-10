@@ -6,21 +6,13 @@ import (
 )
 
 func TestCompose(t *testing.T) {
-	j := `{"string": "this is string", "bool": true, "number": 3.14, "null": null, "object": {
-"obj.string": "obj.string", "obj.bool": false, "obj.number": 123.456, "obj.null": null
-}, "array": [
-"arr.string", true, false, 6457.111, null
-]}`
-	v, err := Parse([]byte(j))
+	val, err := FromInterface(demoInterface)
 	if err != nil {
-		fmt.Println(err)
-		return
+		panic(err)
 	}
-
-	data, err := Compose(v)
+	data, err := Compose(val)
 	if err != nil {
-		fmt.Println(err)
-		return
+		panic(err)
 	}
 	fmt.Println(string(data))
 }
