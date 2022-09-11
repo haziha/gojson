@@ -23,6 +23,7 @@ func (_this *Value) Get(k ...interface{}) (val *Value, err error) {
 			err = fmt.Errorf("%v", err1)
 		}
 	}()
+
 	kVal := reflect.ValueOf(k)
 	ptrList := golist.New[*Value]()
 	ptrList.PushBack(_this)
@@ -38,7 +39,7 @@ func (_this *Value) Get(k ...interface{}) (val *Value, err error) {
 			}
 			key = key.Elem()
 			if key.Kind() == reflect.String {
-				ptrList.PushBack(ptrBack.Value(key.String()))
+				ptrList.PushBack(ptrBack.MustValue(key.String()))
 			} else if key.Kind() == reflect.Slice {
 				if key.IsNil() {
 					err = fmt.Errorf("key must be string, but empty slice")
@@ -47,7 +48,7 @@ func (_this *Value) Get(k ...interface{}) (val *Value, err error) {
 					err = fmt.Errorf("key must be string, but not byte slice")
 					return
 				}
-				ptrList.PushBack(ptrBack.Value(string(key.Bytes())))
+				ptrList.PushBack(ptrBack.MustValue(string(key.Bytes())))
 			} else {
 				err = fmt.Errorf("key must be string, but %v", key.Kind())
 				return
@@ -60,11 +61,11 @@ func (_this *Value) Get(k ...interface{}) (val *Value, err error) {
 			}
 			index = index.Elem()
 			if index.CanInt() {
-				ptrList.PushBack(ptrBack.Index(int(index.Int())))
+				ptrList.PushBack(ptrBack.MustIndex(int(index.Int())))
 			} else if index.CanUint() {
-				ptrList.PushBack(ptrBack.Index(int(index.Uint())))
+				ptrList.PushBack(ptrBack.MustIndex(int(index.Uint())))
 			} else if index.CanFloat() {
-				ptrList.PushBack(ptrBack.Index(int(index.Float())))
+				ptrList.PushBack(ptrBack.MustIndex(int(index.Float())))
 			} else if index.Kind() == reflect.String {
 				jN := json.Number(index.String())
 				var i64 int64
@@ -72,108 +73,211 @@ func (_this *Value) Get(k ...interface{}) (val *Value, err error) {
 					err = fmt.Errorf("index must be integer, but string and cannot conver to integer: %s", jN)
 					return
 				}
-				ptrList.PushBack(ptrBack.Index(int(i64)))
+				ptrList.PushBack(ptrBack.MustIndex(int(i64)))
 			} else {
 				err = fmt.Errorf("index must be integer, but %v", index.Kind())
+				return
 			}
 		default:
 			err = fmt.Errorf("cannot get element in %v", ptrBack.Type())
+			return
 		}
 	}
 
 	return ptrList.Back().Value, nil
 }
 
-func (_this *Value) Int64() int64 {
-	num := _this.Number()
+func (_this *Value) MustInt64() (v int64) {
+	v, err := _this.Int64()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustFloat64() (v float64) {
+	v, err := _this.Float64()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustKeys() (v []string) {
+	v, err := _this.Keys()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustValue(k string) (v *Value) {
+	v, err := _this.Value(k)
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustLen() (v int) {
+	v, err := _this.Len()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustIndex(i int) (v *Value) {
+	v, err := _this.Index(i)
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustStr() (v string) {
+	v, err := _this.Str()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustNumber() (v json.Number) {
+	v, err := _this.Number()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustBool() (v bool) {
+	v, err := _this.Bool()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) MustNull() (v interface{}) {
+	v, err := _this.Null()
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (_this *Value) Int64() (v int64, err error) {
+	num, err := _this.Number()
+	if err != nil {
+		return
+	}
 	i64, err := num.Int64()
 	if err != nil {
-		panic(err)
+		return
 	}
-	return i64
+	return i64, nil
 }
 
-func (_this *Value) Float64() float64 {
-	num := _this.Number()
+func (_this *Value) Float64() (v float64, err error) {
+	num, err := _this.Number()
+	if err != nil {
+		return
+	}
 	f64, err := num.Float64()
 	if err != nil {
-		panic(err)
+		return
 	}
-	return f64
+	return f64, nil
 }
 
-func (_this *Value) Keys() []string {
+func (_this *Value) Keys() (v []string, err error) {
 	if _this.typ&Object == 0 {
-		panic(_this.typ.Error(Object))
-	}
-	strList := make([]string, 0, len(_this.obj))
+		err = _this.typ.Error(Object)
+	} else {
+		v = make([]string, 0, len(_this.obj))
 
-	for k := range _this.obj {
-		strList = append(strList, k)
+		for k := range _this.obj {
+			v = append(v, k)
+		}
 	}
 
-	return strList
+	return
 }
 
-func (_this *Value) Value(key string) *Value {
+func (_this *Value) Value(key string) (v *Value, err error) {
 	if _this.typ&Object == 0 {
-		panic(_this.typ.Error(Object))
+		err = _this.typ.Error(Object)
+	} else {
+		v = _this.obj[key]
 	}
-	return _this.obj[key]
+	return
 }
 
 /*
 Len
 Just object or array
 */
-func (_this *Value) Len() int {
+func (_this *Value) Len() (v int, err error) {
 	if _this.typ&(Object|Array) == 0 {
-		panic(_this.typ.Error(Object | Array))
-	}
-	if _this.typ == Object {
-		return len(_this.obj)
+		err = _this.typ.Error(Object | Array)
+	} else if _this.typ == Object {
+		v = len(_this.obj)
 	} else {
-		return len(_this.arr)
+		v = len(_this.arr)
 	}
+	return
 }
 
-func (_this *Value) Index(i int) *Value {
+func (_this *Value) Index(i int) (v *Value, err error) {
 	if _this.typ&Array == 0 {
-		panic(_this.typ.Error(Array))
+		err = _this.typ.Error(Array)
+	} else if i > len(_this.arr) {
+		err = fmt.Errorf("out of range")
+	} else {
+		v = _this.arr[i]
 	}
-	return _this.arr[i]
+	return
 }
 
 /*
 Str
 Just string or number
 */
-func (_this *Value) Str() string {
+func (_this *Value) Str() (v string, err error) {
 	if _this.typ&(String|Number) == 0 {
-		panic(_this.typ.Error(String | Number))
+		err = _this.typ.Error(String | Number)
+	} else {
+		v = _this.str
 	}
-	return _this.str
+	return
 }
 
-func (_this *Value) Number() json.Number {
+func (_this *Value) Number() (v json.Number, err error) {
 	if _this.typ&Number == 0 {
-		panic(_this.typ.Error(Number))
+		err = _this.typ.Error(Number)
+	} else {
+		v = json.Number(_this.str)
 	}
-	return json.Number(_this.str)
+	return
 }
 
-func (_this *Value) Bool() bool {
+func (_this *Value) Bool() (v bool, err error) {
 	if _this.typ&Boolean == 0 {
-		panic(_this.typ.Error(Boolean))
+		err = _this.typ.Error(Boolean)
+	} else {
+		v = _this.boolean
 	}
-	return _this.boolean
+	return
 }
 
-func (_this *Value) Null() interface{} {
+func (_this *Value) Null() (v interface{}, err error) {
 	if _this.typ&Null == 0 {
-		panic(_this.typ.Error(Null))
+		err = _this.typ.Error(Null)
+	} else {
+		v = nil
 	}
-	return nil
+	return
 }
 
 func (_this *Value) Type() Type {
