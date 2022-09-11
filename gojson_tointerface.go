@@ -3,6 +3,7 @@ package gojson
 import (
 	"github.com/haziha/golist"
 	"reflect"
+	"strings"
 )
 
 func (_this *Value) equalReflectKind(v reflect.Kind) bool {
@@ -71,11 +72,25 @@ func (_this *Value) ToInterface(s any) {
 						if !field.IsExported() {
 							continue
 						}
-						keys := dst.MustKeys()
-						if _, ok := keys[field.Name]; !ok {
-							continue
+						if gj, ok := field.Tag.Lookup("gojson"); ok && gj != "" && len(strings.Split(gj, "/")) >= 2 {
+							paths := strings.Split(gj, "/")
+							paths = paths[1:]
+							p := make([]interface{}, 0, len(paths))
+							for j := range paths {
+								p = append(p, strings.ReplaceAll(strings.ReplaceAll(paths[j], "~0", "~"), "~1", "/"))
+							}
+							dVal, err := dst.Get(p...)
+							if err != nil {
+								continue
+							}
+							vList.PushBack(tempPair{dVal, src.Field(i), false, reflect.Value{}, reflect.Value{}})
+						} else {
+							keys := dst.MustKeys()
+							if _, ok = keys[field.Name]; !ok {
+								continue
+							}
+							vList.PushBack(tempPair{dst.MustValue(field.Name), src.Field(i), false, reflect.Value{}, reflect.Value{}})
 						}
-						vList.PushBack(tempPair{dst.MustValue(field.Name), src.Field(i), false, reflect.Value{}, reflect.Value{}})
 					}
 				}
 			case Array:
