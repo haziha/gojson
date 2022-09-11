@@ -77,7 +77,7 @@ func (_this *Value) ToInterface(s any) {
 							paths = paths[1:]
 							p := make([]interface{}, 0, len(paths))
 							for j := range paths {
-								p = append(p, strings.ReplaceAll(strings.ReplaceAll(paths[j], "~0", "~"), "~1", "/"))
+								p = append(p, strings.ReplaceAll(strings.ReplaceAll(paths[j], "~1", "/"), "~0", "~"))
 							}
 							dVal, err := dst.Get(p...)
 							if err != nil {
