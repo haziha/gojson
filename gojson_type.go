@@ -5,7 +5,8 @@ import "fmt"
 type Type uint
 
 const (
-	String Type = 1 << iota
+	Unknown Type = 0
+	String  Type = 1 << iota
 	Number
 	Boolean
 	Null
