@@ -16,8 +16,8 @@ func (_this *Value) ToInterface(s any) {
 	}
 
 	type tempPair struct {
-		dst *Value
-		src reflect.Value
+		src *Value
+		dst reflect.Value
 
 		flag      bool
 		key       reflect.Value
@@ -29,44 +29,44 @@ func (_this *Value) ToInterface(s any) {
 	for vList.Len() != 0 {
 		back := vList.Back()
 		vList.Remove(back)
-		dst := back.Value.dst
 		src := back.Value.src
+		dst := back.Value.dst
 
-		if dst.equalReflectKind(src.Kind()) {
-			switch dst.typ {
+		if src.equalReflectKind(dst.Kind()) {
+			switch src.typ {
 			case String, Number, Boolean, Null: // base type
-				if !src.CanSet() {
+				if !dst.CanSet() {
 					continue
 				}
 				// can set
-				switch dst.typ {
+				switch src.typ {
 				case String:
-					src.SetString(dst.str)
+					dst.SetString(src.str)
 				case Number:
-					if src.CanUint() {
-						src.SetUint(uint64(dst.MustInt64()))
-					} else if src.CanInt() {
-						src.SetInt(dst.MustInt64())
-					} else if src.CanFloat() {
-						src.SetFloat(dst.MustFloat64())
+					if dst.CanUint() {
+						dst.SetUint(uint64(src.MustInt64()))
+					} else if dst.CanInt() {
+						dst.SetInt(src.MustInt64())
+					} else if dst.CanFloat() {
+						dst.SetFloat(src.MustFloat64())
 					}
 				case Boolean:
-					src.SetBool(dst.boolean)
+					dst.SetBool(src.boolean)
 				case Null:
-					src.Set(reflect.Zero(src.Type()))
+					dst.Set(reflect.Zero(dst.Type()))
 				}
 			case Object:
-				switch src.Kind() {
+				switch dst.Kind() {
 				case reflect.Map:
-					if src.CanSet() {
-						src.Set(reflect.MakeMap(src.Type()))
-						keys := dst.MustKeys()
+					if dst.CanSet() {
+						dst.Set(reflect.MakeMap(dst.Type()))
+						keys := src.MustKeys()
 						for k := range keys {
-							vList.PushBack(tempPair{dst.MustValue(k), reflect.New(src.Type().Elem()).Elem(), true, reflect.ValueOf(k), src})
+							vList.PushBack(tempPair{src.MustValue(k), reflect.New(dst.Type().Elem()).Elem(), true, reflect.ValueOf(k), dst})
 						}
 					}
 				case reflect.Struct:
-					sType := src.Type()
+					sType := dst.Type()
 					for i := 0; i < sType.NumField(); i++ {
 						field := sType.Field(i)
 						if !field.IsExported() {
@@ -79,58 +79,71 @@ func (_this *Value) ToInterface(s any) {
 							for j := range paths {
 								p = append(p, strings.ReplaceAll(strings.ReplaceAll(paths[j], "~1", "/"), "~0", "~"))
 							}
-							dVal, err := dst.Get(p...)
+							dVal, err := src.Get(p...)
 							if err != nil {
 								continue
 							}
-							vList.PushBack(tempPair{dVal, src.Field(i), false, reflect.Value{}, reflect.Value{}})
+							vList.PushBack(tempPair{dVal, dst.Field(i), false, reflect.Value{}, reflect.Value{}})
 						} else {
-							keys := dst.MustKeys()
-							if _, ok = keys[field.Name]; !ok {
-								continue
+							keys := src.MustKeys()
+							if _, ok = keys[field.Name]; ok {
+								vList.PushBack(tempPair{src.MustValue(field.Name), dst.Field(i), false, reflect.Value{}, reflect.Value{}})
+							} else {
+								fReplace := strings.ReplaceAll(field.Name, "_", "")
+								fReplace = strings.ReplaceAll(fReplace, "-", "")
+								fReplace = strings.ToLower(fReplace)
+								for k := range keys {
+									kReplace := strings.ReplaceAll(k, "_", "")
+									kReplace = strings.ReplaceAll(kReplace, "-", "")
+									kReplace = strings.ToLower(kReplace)
+
+									if fReplace == kReplace {
+										vList.PushBack(tempPair{src.MustValue(k), dst.Field(i), false, reflect.Value{}, reflect.Value{}})
+										break
+									}
+								}
 							}
-							vList.PushBack(tempPair{dst.MustValue(field.Name), src.Field(i), false, reflect.Value{}, reflect.Value{}})
 						}
 					}
 				}
 			case Array:
-				switch src.Kind() {
+				switch dst.Kind() {
 				case reflect.Array:
-					for i := 0; i < src.Len() && i < dst.MustLen(); i++ {
-						vList.PushBack(tempPair{dst.MustIndex(i), src.Index(i), false, reflect.Value{}, reflect.Value{}})
+					for i := 0; i < dst.Len() && i < src.MustLen(); i++ {
+						vList.PushBack(tempPair{src.MustIndex(i), dst.Index(i), false, reflect.Value{}, reflect.Value{}})
 					}
 				case reflect.Slice:
-					if src.CanSet() {
-						src.Set(reflect.MakeSlice(src.Type(), dst.MustLen(), dst.MustLen()))
-						for i := 0; i < dst.MustLen(); i++ {
-							vList.PushBack(tempPair{dst.MustIndex(i), src.Index(i), false, reflect.Value{}, reflect.Value{}})
+					if dst.CanSet() {
+						dst.Set(reflect.MakeSlice(dst.Type(), src.MustLen(), src.MustLen()))
+						for i := 0; i < src.MustLen(); i++ {
+							vList.PushBack(tempPair{src.MustIndex(i), dst.Index(i), false, reflect.Value{}, reflect.Value{}})
 						}
 					}
 				}
 			}
 		} else {
-			switch src.Kind() {
+			switch dst.Kind() {
 			case reflect.Interface:
-				if src.CanSet() {
-					vDst := dst.Interface()
-					if reflect.ValueOf(vDst).CanConvert(src.Type()) {
-						src.Set(reflect.ValueOf(vDst).Convert(src.Type()))
+				if dst.CanSet() {
+					vDst := src.Interface()
+					if reflect.ValueOf(vDst).CanConvert(dst.Type()) {
+						dst.Set(reflect.ValueOf(vDst).Convert(dst.Type()))
 					}
 				}
 			case reflect.Pointer:
-				if src.CanSet() {
-					if dst.equalReflectKind(src.Type().Elem().Kind()) {
-						src.Set(reflect.New(src.Type().Elem()))
-						vList.PushBack(tempPair{dst, src.Elem(), false, reflect.Value{}, reflect.Value{}})
+				if dst.CanSet() {
+					if src.equalReflectKind(dst.Type().Elem().Kind()) {
+						dst.Set(reflect.New(dst.Type().Elem()))
+						vList.PushBack(tempPair{src, dst.Elem(), false, reflect.Value{}, reflect.Value{}})
 					} else {
-						src.Set(reflect.Zero(src.Type()))
+						dst.Set(reflect.Zero(dst.Type()))
 					}
 				}
 			}
 		}
 
 		if back.Value.flag {
-			back.Value.parentMap.SetMapIndex(back.Value.key, src)
+			back.Value.parentMap.SetMapIndex(back.Value.key, dst)
 		}
 	}
 }
