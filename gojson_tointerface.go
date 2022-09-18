@@ -92,6 +92,12 @@ func newBaseTask(src *Value, dst reflect.Value, parent *taskPair) (tp *taskPair)
 }
 
 func (_this *Value) ToInterface(s any, options ...interface{}) (err error) {
+	defer func() {
+		if err1 := recover(); err1 != nil {
+			err = fmt.Errorf("ToInterface fail: %v", err1)
+		}
+	}()
+
 	keyTagName := "gk"
 	pathTagName := "gp"
 	for _, arg := range options {
@@ -128,6 +134,26 @@ func (_this *Value) ToInterface(s any, options ...interface{}) (err error) {
 			if src.typ == Boolean && dst.Kind() == reflect.Bool {
 				dst.SetBool(src.boolean)
 			} else if src.typ == String && dst.Kind() == reflect.String {
+				dst.SetString(src.str)
+			} else if src.typ == String && dst.Kind() >= reflect.Int && dst.Kind() <= reflect.Int64 {
+				if i64, err := src.Int64(); err == nil {
+					dst.SetInt(i64)
+				} else if task.parent != nil {
+					task.parent.childFlag = false
+				}
+			} else if src.typ == String && dst.Kind() >= reflect.Uint && dst.Kind() <= reflect.Uint64 {
+				if u64, err := src.Uint64(); err == nil {
+					dst.SetUint(u64)
+				} else if task.parent != nil {
+					task.parent.childFlag = false
+				}
+			} else if src.typ == String && dst.Kind() >= reflect.Float32 && dst.Kind() <= reflect.Float64 {
+				if f64, err := src.Float64(); err == nil {
+					dst.SetFloat(f64)
+				} else {
+					task.parent.childFlag = false
+				}
+			} else if src.typ == Number && dst.Kind() == reflect.String {
 				dst.SetString(src.str)
 			} else if src.typ == Number && dst.Kind() >= reflect.Int && dst.Kind() <= reflect.Int64 {
 				dst.SetInt(src.MustInt64())

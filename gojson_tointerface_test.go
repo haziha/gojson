@@ -1,10 +1,78 @@
 package gojson
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
 )
+
+func TestValue_ToInterface_StringToNumber(t *testing.T) {
+	srcInt, err := FromInterface("-314519")
+	if err != nil {
+		panic(err)
+	}
+	srcUint, err := FromInterface("314519")
+	if err != nil {
+		panic(err)
+	}
+	srcFloat, err := FromInterface("-3.14159")
+	if err != nil {
+		panic(err)
+	}
+	var dstInt *int32
+	var dstUint *uint32
+	var dstFloat64 *float32
+	if err = srcFloat.ToInterface(&dstInt); err != nil {
+		panic(err)
+	}
+	if err = srcFloat.ToInterface(&dstUint); err != nil {
+		panic(err)
+	}
+	if err = srcFloat.ToInterface(&dstFloat64); err != nil {
+		panic(err)
+	}
+	fmt.Println(srcFloat.Interface(), dstInt, dstUint, *dstFloat64)
+	dstInt = nil
+	dstUint = nil
+	dstFloat64 = nil
+	if err = srcUint.ToInterface(&dstInt); err != nil {
+		panic(err)
+	}
+	if err = srcUint.ToInterface(&dstUint); err != nil {
+		panic(err)
+	}
+	if err = srcUint.ToInterface(&dstFloat64); err != nil {
+		panic(err)
+	}
+	fmt.Println(srcUint.Interface(), *dstInt, *dstUint, *dstFloat64)
+	dstInt = nil
+	dstUint = nil
+	dstFloat64 = nil
+	if err = srcInt.ToInterface(&dstInt); err != nil {
+		panic(err)
+	}
+	if err = srcInt.ToInterface(&dstUint); err != nil {
+		panic(err)
+	}
+	if err = srcInt.ToInterface(&dstFloat64); err != nil {
+		panic(err)
+	}
+	fmt.Println(srcInt.Interface(), *dstInt, dstUint, *dstFloat64)
+}
+
+func TestValue_ToInterface_NumberToString(t *testing.T) {
+	src, err := FromInterface(23333333)
+	if err != nil {
+		panic(err)
+	}
+	var dst json.Number
+	err = src.ToInterface(&dst)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(src, dst)
+}
 
 func TestValue_ToInterface(t *testing.T) {
 	newInt := func(n int) (p *int) {
