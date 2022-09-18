@@ -41,7 +41,7 @@ func (_this *Value) Get(k ...interface{}) (val *Value, err error) {
 			if key.Kind() == reflect.String {
 				ptrList.PushBack(ptrBack.MustValue(key.String()))
 			} else if key.Kind() == reflect.Slice {
-				if key.IsNil() {
+				if key.IsZero() {
 					err = fmt.Errorf("key must be string, but empty slice")
 					return
 				} else if key.Type() != byteSliceType {
@@ -176,35 +176,18 @@ func (_this *Value) MustNull() (v interface{}) {
 }
 
 func (_this *Value) Uint64() (v uint64, err error) {
-	if _, err = _this.Number(); err != nil {
-		return
-	}
 	v, err = strconv.ParseUint(_this.str, 10, 64)
 	return
 }
 
 func (_this *Value) Int64() (v int64, err error) {
-	num, err := _this.Number()
-	if err != nil {
-		return
-	}
-	i64, err := num.Int64() // equal strconv.ParseInt
-	if err != nil {
-		return
-	}
-	return i64, nil
+	v, err = strconv.ParseInt(_this.str, 10, 64)
+	return
 }
 
 func (_this *Value) Float64() (v float64, err error) {
-	num, err := _this.Number()
-	if err != nil {
-		return
-	}
-	f64, err := num.Float64()
-	if err != nil {
-		return
-	}
-	return f64, nil
+	v, err = strconv.ParseFloat(_this.str, 64)
+	return
 }
 
 func (_this *Value) Keys() (v map[string]struct{}, err error) {

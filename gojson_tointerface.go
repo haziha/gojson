@@ -1,149 +1,249 @@
 package gojson
 
 import (
+	"fmt"
 	"github.com/haziha/golist"
 	"reflect"
 	"strings"
 )
 
-func (_this *Value) equalReflectKind(v reflect.Kind) bool {
-	return mapKind2Type[v] == _this.typ
+/*
+变量为零值规则
+	1.	基础类型(非复合类型, number/bool/string):
+			可能确实是零值(不告知父级), 也可能赋值失败(会告知父级)
+	2.	指针/interface:
+			源数据不存在与之对应的数据(告知父级), 或子元素赋值失败(不告知父级)
+	3.	map/slice:
+			源数据类型不匹配(非 object / array)[会告知父级]
+	4.	struct/array:
+			源数据类型不匹配(非 object / array)[会告知父级], 或确实是零值(不告知父级)
+	5.	struct field/array element/map element/slice element:
+			成员/子元素赋值失败, 或确实是零值
+			或不存在(
+				仅限struct;
+				map只要有key, 则 if ok 一定是 true;
+				array 和 slice 则需要对应 index, 所以不能把元素去掉, 只能置空值
+			)
+			均不告知父级
+*/
+
+type taskType int
+
+const (
+	baseTask taskType = 1 << iota
+	mapTask
+	checkTask
+)
+
+type taskPair struct {
+	typ taskType
+
+	// baseTask
+	src    *Value
+	dst    reflect.Value
+	parent *taskPair
+
+	// mapTask
+	key       reflect.Value
+	parentMap reflect.Value
+
+	// mapTask or checkTask
+	childFlag bool
 }
 
-func (_this *Value) ToInterface(s any) {
+type KeyTagName string
+type PathTagName string
+
+func newMapCheckTask(key reflect.Value, parentMap reflect.Value) (tp *taskPair) {
+	return &taskPair{
+		typ:       mapTask | checkTask,
+		key:       key,
+		parentMap: parentMap,
+		childFlag: true,
+	}
+}
+
+func newMapTask(src *Value, dst reflect.Value, parent *taskPair, key reflect.Value, parentMap reflect.Value) (tp *taskPair) {
+	return &taskPair{
+		typ:       mapTask,
+		src:       src,
+		dst:       dst,
+		parent:    parent,
+		key:       key,
+		parentMap: parentMap,
+	}
+}
+
+func newCheckTask(dst reflect.Value) (tp *taskPair) {
+	return &taskPair{
+		typ:       checkTask,
+		dst:       dst,
+		childFlag: true,
+	}
+}
+
+func newBaseTask(src *Value, dst reflect.Value, parent *taskPair) (tp *taskPair) {
+	return &taskPair{
+		typ:    baseTask,
+		src:    src,
+		dst:    dst,
+		parent: parent,
+	}
+}
+
+func (_this *Value) ToInterface(s any, options ...interface{}) (err error) {
+	keyTagName := "gk"
+	pathTagName := "gp"
+	for _, arg := range options {
+		switch v := arg.(type) {
+		case KeyTagName:
+			keyTagName = string(v)
+		case PathTagName:
+			pathTagName = string(v)
+		}
+	}
+
 	if reflect.ValueOf(s).Kind() != reflect.Pointer {
+		err = fmt.Errorf("ToInterface(non-pointer)")
+		return
+	}
+	if reflect.ValueOf(s).Elem().Kind() == reflect.Invalid {
+		err = fmt.Errorf("ToInterface(nil)")
 		return
 	}
 
-	type tempPair struct {
-		src *Value
-		dst reflect.Value
+	tList := golist.New[*taskPair]()
+	tList.PushBack(newCheckTask(reflect.ValueOf(s).Elem()))
+	tList.PushBack(newBaseTask(_this, reflect.ValueOf(s).Elem(), tList.Back().Value))
 
-		flag      bool
-		key       reflect.Value
-		parentMap reflect.Value
-	}
-	vList := golist.New[tempPair]()
-	vList.PushBack(tempPair{_this, reflect.ValueOf(s).Elem(), false, reflect.Value{}, reflect.Value{}})
+	for tList.Len() != 0 {
+		back := tList.Back()
+		tList.Remove(back)
+		task := back.Value
 
-	for vList.Len() != 0 {
-		back := vList.Back()
-		vList.Remove(back)
-		src := back.Value.src
-		dst := back.Value.dst
+		if task.typ == baseTask || task.typ == mapTask {
+			src := task.src
+			dst := task.dst
 
-		if src.equalReflectKind(dst.Kind()) {
-			switch src.typ {
-			case String, Number, Boolean, Null: // base type
-				if !dst.CanSet() {
-					continue
+			if src.typ == Boolean && dst.Kind() == reflect.Bool {
+				dst.SetBool(src.boolean)
+			} else if src.typ == String && dst.Kind() == reflect.String {
+				dst.SetString(src.str)
+			} else if src.typ == Number && dst.Kind() >= reflect.Int && dst.Kind() <= reflect.Int64 {
+				dst.SetInt(src.MustInt64())
+			} else if src.typ == Number && dst.Kind() >= reflect.Uint && dst.Kind() <= reflect.Uint64 {
+				dst.SetUint(src.MustUint64())
+			} else if src.typ == Number && dst.Kind() >= reflect.Float32 && dst.Kind() <= reflect.Float64 {
+				dst.SetFloat(src.MustFloat64())
+			} else if src.typ == Object && dst.Kind() == reflect.Map {
+				if dst.IsZero() {
+					dst.Set(reflect.MakeMap(dst.Type()))
 				}
-				// can set
-				switch src.typ {
-				case String:
-					dst.SetString(src.str)
-				case Number:
-					if dst.CanUint() {
-						dst.SetUint(uint64(src.MustInt64()))
-					} else if dst.CanInt() {
-						dst.SetInt(src.MustInt64())
-					} else if dst.CanFloat() {
-						dst.SetFloat(src.MustFloat64())
+				for k := range src.obj {
+					tList.PushBack(newMapCheckTask(reflect.ValueOf(k), dst))
+					tList.PushBack(newMapTask(src.MustValue(k), reflect.New(dst.Type().Elem()).Elem(), tList.Back().Value, reflect.ValueOf(k), dst))
+				}
+			} else if src.typ == Array && dst.Kind() == reflect.Slice {
+				if dst.IsZero() {
+					dst.Set(reflect.MakeSlice(dst.Type(), src.MustLen(), src.MustLen()))
+				}
+				for i := 0; i < src.MustLen() && i < dst.Len(); i++ {
+					tList.PushBack(newBaseTask(src.MustIndex(i), dst.Index(i), nil))
+				}
+			} else if src.typ == Object && dst.Kind() == reflect.Struct {
+				// 需过滤私有成员, 虽然能用 reflect 和 unsafe 强行修改, 但没必要
+				dstTyp := dst.Type()
+				keys := src.MustKeys()
+				replacer := strings.NewReplacer("_", "", "-", "")
+				for i := 0; i < dstTyp.NumField(); i++ {
+					if !dstTyp.Field(i).IsExported() {
+						continue
 					}
-				case Boolean:
-					dst.SetBool(src.boolean)
-				case Null:
-					dst.Set(reflect.Zero(dst.Type()))
-				}
-			case Object:
-				switch dst.Kind() {
-				case reflect.Map:
-					if dst.CanSet() {
-						dst.Set(reflect.MakeMap(dst.Type()))
-						keys := src.MustKeys()
-						for k := range keys {
-							vList.PushBack(tempPair{src.MustValue(k), reflect.New(dst.Type().Elem()).Elem(), true, reflect.ValueOf(k), dst})
+					// gp 优先于 gk
+					// 是否指定路径
+					if gp := dstTyp.Field(i).Tag.Get(pathTagName); len(gp) > 0 && gp[0] == '/' {
+						k := strings.Split(gp, "/")[1:]
+						ki := make([]interface{}, 0, len(k))
+						for j := range k {
+							ki = append(ki, strings.ReplaceAll(strings.ReplaceAll(k[j], "~1", "/"), "~0", "~"))
 						}
-					}
-				case reflect.Struct:
-					sType := dst.Type()
-					for i := 0; i < sType.NumField(); i++ {
-						field := sType.Field(i)
-						if !field.IsExported() {
+						if src, err := src.Get(ki...); err == nil && src != nil {
+							tList.PushBack(newCheckTask(dst.Field(i)))
+							tList.PushBack(newBaseTask(src, dst.Field(i), tList.Back().Value))
 							continue
 						}
-						if gj, ok := field.Tag.Lookup("gojson"); ok && gj != "" && len(strings.Split(gj, "/")) >= 2 {
-							paths := strings.Split(gj, "/")
-							paths = paths[1:]
-							p := make([]interface{}, 0, len(paths))
-							for j := range paths {
-								p = append(p, strings.ReplaceAll(strings.ReplaceAll(paths[j], "~1", "/"), "~0", "~"))
-							}
-							dVal, err := src.Get(p...)
-							if err != nil {
-								continue
-							}
-							vList.PushBack(tempPair{dVal, dst.Field(i), false, reflect.Value{}, reflect.Value{}})
+					}
+					// 是否有指定 key
+					if gk, ok := dstTyp.Field(i).Tag.Lookup(keyTagName); ok {
+						tList.PushBack(newCheckTask(dst.Field(i)))
+						if _, ok = keys[gk]; ok {
+							tList.PushBack(newBaseTask(src.MustValue(gk), dst.Field(i), tList.Back().Value))
 						} else {
-							keys := src.MustKeys()
-							if _, ok = keys[field.Name]; ok {
-								vList.PushBack(tempPair{src.MustValue(field.Name), dst.Field(i), false, reflect.Value{}, reflect.Value{}})
-							} else {
-								fReplace := strings.ReplaceAll(field.Name, "_", "")
-								fReplace = strings.ReplaceAll(fReplace, "-", "")
-								fReplace = strings.ToLower(fReplace)
-								for k := range keys {
-									kReplace := strings.ReplaceAll(k, "_", "")
-									kReplace = strings.ReplaceAll(kReplace, "-", "")
-									kReplace = strings.ToLower(kReplace)
-
-									if fReplace == kReplace {
-										vList.PushBack(tempPair{src.MustValue(k), dst.Field(i), false, reflect.Value{}, reflect.Value{}})
-										break
-									}
-								}
+							tList.Back().Value.childFlag = false
+						}
+						continue
+					} else {
+						gk = strings.ToLower(replacer.Replace(dstTyp.Field(i).Name))
+						for j := range keys {
+							k := strings.ToLower(replacer.Replace(j))
+							if gk == k {
+								tList.PushBack(newCheckTask(dst.Field(i)))
+								tList.PushBack(newBaseTask(src.MustValue(j), dst.Field(i), tList.Back().Value))
+								break
 							}
 						}
 					}
 				}
-			case Array:
-				switch dst.Kind() {
-				case reflect.Array:
-					for i := 0; i < dst.Len() && i < src.MustLen(); i++ {
-						vList.PushBack(tempPair{src.MustIndex(i), dst.Index(i), false, reflect.Value{}, reflect.Value{}})
-					}
-				case reflect.Slice:
-					if dst.CanSet() {
-						dst.Set(reflect.MakeSlice(dst.Type(), src.MustLen(), src.MustLen()))
-						for i := 0; i < src.MustLen(); i++ {
-							vList.PushBack(tempPair{src.MustIndex(i), dst.Index(i), false, reflect.Value{}, reflect.Value{}})
-						}
-					}
+			} else if src.typ == Array && dst.Kind() == reflect.Array {
+				for i := 0; i < src.MustLen() && i < dst.Len(); i++ {
+					tList.PushBack(newCheckTask(dst.Index(i)))
+					tList.PushBack(newBaseTask(src.MustIndex(i), dst.Index(i), tList.Back().Value))
 				}
+			} else if src.typ == Null {
+				if task.parent != nil {
+					task.parent.childFlag = false
+				}
+				dst.Set(reflect.Zero(dst.Type()))
+			} else if dst.Kind() == reflect.Pointer {
+				if dst.Elem().Kind() == reflect.Invalid {
+					dst.Set(reflect.New(dst.Type().Elem()))
+				}
+				tList.PushBack(newCheckTask(dst))
+				tList.PushBack(newBaseTask(src, dst.Elem(), tList.Back().Value))
+			} else if dst.Kind() == reflect.Interface {
+				if dst.Elem().Kind() == reflect.Invalid {
+					src_ := reflect.ValueOf(src.Interface())
+					if src_.CanConvert(dst.Type()) {
+						dst.Set(src_.Convert(dst.Type()))
+					} else if task.parent != nil {
+						task.parent.childFlag = false
+					}
+				} else {
+					tList.PushBack(newCheckTask(dst))
+					tList.PushBack(newBaseTask(src, dst.Elem(), tList.Back().Value))
+				}
+			} else {
+				if task.parent != nil {
+					task.parent.childFlag = false
+				}
+				continue
+			}
+
+			if task.typ == mapTask {
+				task.parentMap.SetMapIndex(task.key, dst)
+			}
+		} else if task.typ == (mapTask | checkTask) {
+			if !task.childFlag {
+				task.parentMap.SetMapIndex(task.key, reflect.Zero(task.parentMap.Type().Elem()))
+			}
+		} else if task.typ == checkTask {
+			if !task.childFlag {
+				task.dst.Set(reflect.Zero(task.dst.Type()))
 			}
 		} else {
-			switch dst.Kind() {
-			case reflect.Interface:
-				if dst.CanSet() {
-					vDst := src.Interface()
-					if reflect.ValueOf(vDst).CanConvert(dst.Type()) {
-						dst.Set(reflect.ValueOf(vDst).Convert(dst.Type()))
-					}
-				}
-			case reflect.Pointer:
-				if dst.CanSet() {
-					if src.equalReflectKind(dst.Type().Elem().Kind()) {
-						dst.Set(reflect.New(dst.Type().Elem()))
-						vList.PushBack(tempPair{src, dst.Elem(), false, reflect.Value{}, reflect.Value{}})
-					} else {
-						dst.Set(reflect.Zero(dst.Type()))
-					}
-				}
-			}
-		}
-
-		if back.Value.flag {
-			back.Value.parentMap.SetMapIndex(back.Value.key, dst)
+			panic("unknown type")
 		}
 	}
+
+	return
 }
